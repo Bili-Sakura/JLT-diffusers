@@ -17,9 +17,11 @@ ImageNet 256×256 samples from JLT-B/1 using 50-step Heun sampling.
 
 ## Authors
 
-**Funing Fu** · **Tenghui Wang** · **Guanyu Zhou** · **Junyong Cen** · **Qichao Zhu**
+**Funing Fu**<sup>1,*</sup> · **Tenghui Wang**<sup>2,*</sup> · **Junyong Cen**<sup>1</sup> · **Qichao Zhu**<sup>3</sup> · **Guanyu Zhou**<sup>2</sup>
 
-<sup>Wuhan University of Technology · Independent Researcher · Hangzhou Jiyi AI</sup>
+<sup>1</sup> Independent Researcher · <sup>2</sup> Wuhan University of Technology · <sup>3</sup> Hangzhou Jiyi AI
+
+<sup>*</sup> Equal contribution
 
 ## Abstract
 
