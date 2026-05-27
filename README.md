@@ -15,13 +15,6 @@
 ImageNet 256×256 samples from JLT-B/1 using 50-step Heun sampling.
 </div>
 
-## To Do
-
-- [ ] Complete code release (training + evaluation)
-- [ ] Release pretrained checkpoints (JLT-B/1, JLT-B/2, DiT-B/1, DiT-B/2)
-- [ ] Add FID statistics files for evaluation
-- [ ] Provide detailed installation instructions
-
 ## Authors
 
 **Funing Fu**<sup>1,*</sup> · **Tenghui Wang**<sup>2,*</sup> · **Junyong Cen**<sup>1</sup> · **Qichao Zhu**<sup>3</sup> · **Guanyu Zhou**<sup>2</sup>
@@ -29,6 +22,13 @@ ImageNet 256×256 samples from JLT-B/1 using 50-step Heun sampling.
 <sup>1</sup> Independent Researcher · <sup>2</sup> Wuhan University of Technology · <sup>3</sup> Hangzhou Jiyi AI
 
 <sup>*</sup> Equal contribution
+
+## To Do
+
+- [ ] Complete code release (training + evaluation)
+- [ ] Release pretrained checkpoints (JLT-B/1, JLT-B/2, DiT-B/1, DiT-B/2)
+- [ ] Add FID statistics files for evaluation
+- [ ] Provide detailed installation instructions
 
 ## Abstract
 
@@ -119,7 +119,7 @@ JLT is a Base-scale latent Transformer following JiT-B/16 for architectural comp
 ### Training Curves
 
 <div align="center">
-<img src="images/training_curves_compact.pdf" width="80%">
+<img src="images/training_curves_compact.png" width="80%">
 <br><br>
 Training curves for the matched target ablation. Checkpoints after initialization are evaluated every 40 epochs; clean-latent variants keep lower FID and higher Inception Score than velocity counterparts.
 </div>
