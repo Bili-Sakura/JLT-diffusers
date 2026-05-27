@@ -15,6 +15,13 @@
 ImageNet 256×256 samples from JLT-B/1 using 50-step Heun sampling.
 </div>
 
+## To Do
+
+- [ ] Complete code release (training + evaluation)
+- [ ] Release pretrained checkpoints (JLT-B/1, JLT-B/2, DiT-B/1, DiT-B/2)
+- [ ] Add FID statistics files for evaluation
+- [ ] Provide detailed installation instructions
+
 ## Authors
 
 **Funing Fu**<sup>1,*</sup> · **Tenghui Wang**<sup>2,*</sup> · **Junyong Cen**<sup>1</sup> · **Qichao Zhu**<sup>3</sup> · **Guanyu Zhou**<sup>2</sup>
@@ -124,13 +131,6 @@ Training curves for the matched target ablation. Checkpoints after initializatio
 2. **Mechanism:** Velocity prediction adds an isotropic covariance floor and amplifies low-variance latent directions, while clean prediction attenuates them.
 
 3. **Representation independence:** The advantage is not a byproduct of using a particular patch size — it holds at both /1 and /2 VAE-grid scales.
-
-## To Do
-
-- [ ] Complete code release (training + evaluation)
-- [ ] Release pretrained checkpoints (JLT-B/1, JLT-B/2, DiT-B/1, DiT-B/2)
-- [ ] Add FID statistics files for evaluation
-- [ ] Provide detailed installation instructions
 
 ## Citation
 
