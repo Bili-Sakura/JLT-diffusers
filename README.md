@@ -17,7 +17,7 @@ ImageNet 256×256 samples from JLT-B/1 using 50-step Heun sampling.
 
 ## Authors
 
-**Funing Fu**<sup>1,*</sup> · **Tenghui Wang**<sup>2,*</sup> · **Junyong Cen**<sup>1</sup> · **Qichao Zhu**<sup>3</sup> · **Guanyu Zhou**<sup>2</sup>
+**Funing Fu**<sup>1,*</sup> · **Tenghui Wang**<sup>2,*</sup> · **Guanyu Zhou**<sup>2</sup> · **Junyong Cen**<sup>1</sup> · **Qichao Zhu**<sup>3</sup>
 
 <sup>1</sup> Independent Researcher · <sup>2</sup> Wuhan University of Technology · <sup>3</sup> Hangzhou Jiyi AI
 
@@ -137,7 +137,7 @@ Training curves for the matched target ablation. Checkpoints after initializatio
 ```bibtex
 @misc{fu2026jltcleanlatentpredictionlatent,
       title={JLT: Clean-Latent Prediction in Latent Diffusion Transformers},
-      author={Funing Fu and Tenghui Wang and Junyong Cen and Qichao Zhu and Guanyu Zhou},
+      author={Funing Fu and Tenghui Wang and Guanyu Zhou and Junyong Cen and Qichao Zhu},
       year={2026},
       eprint={2605.27102},
       archivePrefix={arXiv},
