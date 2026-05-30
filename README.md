@@ -24,6 +24,95 @@ ImageNet 256×256 samples from JLT-B/1 using 50-step Heun sampling.
 
 \* Equal contribution
 
+## Implementation
+
+### Installation
+
+```bash
+# Clone repository
+git clone https://github.com/akatsuki-neo/JLT.git
+cd JLT
+
+# Create conda environment
+conda env create -f environment.yaml
+conda activate jit
+
+# Install accelerate (required for distributed training)
+pip install accelerate
+
+# Install additional dependencies
+pip install torch-fidelity  # for FID evaluation
+```
+
+### Data Preparation
+
+#### 1. Download ImageNet
+
+Download ImageNet train/val from [image-net.org](https://image-net.org/download.php) and extract to a directory.
+
+#### 2. Encode Images to FLUX.2 Latents
+
+Encode ImageNet to latent shards for efficient training:
+
+```bash
+python prepare_ref.py \
+    --data_path /path/to/imagenet \
+    --output_path /path/to/imagenet_latents_256 \
+    --img_size 256 \
+    --vae_type flux2 \
+    --vae_model_name_or_path black-forest-labs/FLUX.2-klein-4B \
+    --batch_size 256 \
+    --num_workers 8
+```
+
+This produces safetensor latent shards in `/path/to/imagenet_latents_256`.
+
+### Running Experiments
+
+#### JLT-B/1 (Clean-Latent Prediction, /1 scale)
+
+```bash
+./start_latent_jit_16.sh [GPU_IDS]
+
+# Example: use GPUs 0-3 only
+./start_latent_jit_16.sh 0,1,2,3
+```
+
+Key settings:
+- Model: JiT-B/1 (patch 1, 16x16 latent grid)
+- Batch size: 256 × 8 GPUs × 2 accum = 4096 effective
+- Epochs: 40 (with 5 warmup)
+- Learning rate: 5e-5 base LR
+
+#### JLT-B/2 (Clean-Latent Prediction, /2 scale)
+
+```bash
+./start_latent_jit_32.sh [GPU_IDS]
+```
+
+#### DiT-B/2 Baseline (Velocity Prediction)
+
+```bash
+./start_latent_v_32.sh [GPU_IDS]
+```
+
+Key difference: `--flow_matching` flag enables direct velocity prediction.
+
+### Key Arguments
+
+| Argument | Description |
+|----------|-------------|
+| `--model` | Model variant: `JiT-B/1` or `JiT-B/2` |
+| `--vae_type` | `flux2` for FLUX.2 latent space |
+| `--flow_matching` | Enable velocity prediction (DiT baseline) |
+| `--batch_size` | Micro batch per GPU |
+| `--blr` | Base learning rate |
+| `--epochs` | Training epochs |
+| `--cfg` | Classifier-free guidance scale |
+| `--data_path` | Path to pre-encoded latents |
+| `--use_latent_cache` | Load pre-encoded safetensor latents |
+| `--vae_model_name_or_path` | FLUX.2 VAE path or HuggingFace repo |
+
 ## Method
 
 ### Formulation and Prediction Targets
@@ -121,95 +210,6 @@ Training curves for the matched target ablation. Checkpoints after initializatio
 2. **Mechanism:** Velocity prediction adds an isotropic covariance floor and amplifies low-variance latent directions, while clean prediction attenuates them.
 
 3. **Representation independence:** The advantage is not a byproduct of using a particular patch size — it holds at both /1 and /2 VAE-grid scales.
-
-## Implementation
-
-### Installation
-
-```bash
-# Clone repository
-git clone https://github.com/akatsuki-neo/JLT.git
-cd JLT
-
-# Create conda environment
-conda env create -f environment.yaml
-conda activate jit
-
-# Install accelerate (required for distributed training)
-pip install accelerate
-
-# Install additional dependencies
-pip install torch-fidelity  # for FID evaluation
-```
-
-### Data Preparation
-
-#### 1. Download ImageNet
-
-Download ImageNet train/val from [image-net.org](https://image-net.org/download.php) and extract to a directory.
-
-#### 2. Encode Images to FLUX.2 Latents
-
-Encode ImageNet to latent shards for efficient training:
-
-```bash
-python prepare_ref.py \
-    --data_path /path/to/imagenet \
-    --output_path /path/to/imagenet_latents_256 \
-    --img_size 256 \
-    --vae_type flux2 \
-    --vae_model_name_or_path black-forest-labs/FLUX.2-klein-4B \
-    --batch_size 256 \
-    --num_workers 8
-```
-
-This produces safetensor latent shards in `/path/to/imagenet_latents_256`.
-
-### Running Experiments
-
-#### JLT-B/1 (Clean-Latent Prediction, /1 scale)
-
-```bash
-./start_latent_jit_16.sh [GPU_IDS]
-
-# Example: use GPUs 0-3 only
-./start_latent_jit_16.sh 0,1,2,3
-```
-
-Key settings:
-- Model: JiT-B/1 (patch 1, 16x16 latent grid)
-- Batch size: 256 × 8 GPUs × 2 accum = 4096 effective
-- Epochs: 40 (with 5 warmup)
-- Learning rate: 5e-5 base LR
-
-#### JLT-B/2 (Clean-Latent Prediction, /2 scale)
-
-```bash
-./start_latent_jit_32.sh [GPU_IDS]
-```
-
-#### DiT-B/2 Baseline (Velocity Prediction)
-
-```bash
-./start_latent_v_32.sh [GPU_IDS]
-```
-
-Key difference: `--flow_matching` flag enables direct velocity prediction.
-
-### Key Arguments
-
-| Argument | Description |
-|----------|-------------|
-| `--model` | Model variant: `JiT-B/1` or `JiT-B/2` |
-| `--vae_type` | `flux2` for FLUX.2 latent space |
-| `--flow_matching` | Enable velocity prediction (DiT baseline) |
-| `--batch_size` | Micro batch per GPU |
-| `--blr` | Base learning rate |
-| `--epochs` | Training epochs |
-| `--cfg` | Classifier-free guidance scale |
-| `--data_path` | Path to pre-encoded latents |
-| `--use_latent_cache` | Load pre-encoded safetensor latents |
-| `--vae_model_name_or_path` | FLUX.2 VAE path or HuggingFace repo |
 
 ## Citation
 
