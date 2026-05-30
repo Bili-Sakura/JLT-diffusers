@@ -24,10 +24,6 @@ ImageNet 256×256 samples from JLT-B/1 using 50-step Heun sampling.
 
 \* Equal contribution
 
-## Abstract
-
-Flow matching with clean-data prediction has shown that regressing the clean point can exploit low-dimensional structure more effectively than predicting an ambient noised quantity. We ask whether this principle remains useful after images are mapped into a learned latent space, where compression has already removed much of the raw pixel variability. We instantiate this comparison with **JLT**, a controlled 130M latent diffusion Transformer over frozen FLUX.2 VAE codes, and compare clean-latent prediction with a matched velocity-prediction DiT under the same representation, backbone, and training settings. Although $x$, $\epsilon$, and $v$ are linearly convertible for a fixed corruption time, a local Gaussian analysis shows that velocity regression inherits an isotropic target-covariance floor and amplifies low-variance latent directions, while clean prediction damps them. On ImageNet 256×256, **JLT-B/1** obtains **FID-50K 2.50** with classifier-free guidance, with a large matched-target gap over velocity prediction. These results suggest that prediction targets in latent diffusion are representation-dependent geometric choices, rather than interchangeable algebraic parameterizations.
-
 ## Method
 
 ### Formulation and Prediction Targets
@@ -126,7 +122,9 @@ Training curves for the matched target ablation. Checkpoints after initializatio
 
 3. **Representation independence:** The advantage is not a byproduct of using a particular patch size — it holds at both /1 and /2 VAE-grid scales.
 
-## Installation
+## Implementation
+
+### Installation
 
 ```bash
 # Clone repository
@@ -144,13 +142,13 @@ pip install accelerate
 pip install torch-fidelity  # for FID evaluation
 ```
 
-## Data Preparation
+### Data Preparation
 
-### 1. Download ImageNet
+#### 1. Download ImageNet
 
 Download ImageNet train/val from [image-net.org](https://image-net.org/download.php) and extract to a directory.
 
-### 2. Encode Images to FLUX.2 Latents
+#### 2. Encode Images to FLUX.2 Latents
 
 Encode ImageNet to latent shards for efficient training:
 
@@ -167,9 +165,9 @@ python prepare_ref.py \
 
 This produces safetensor latent shards in `/path/to/imagenet_latents_256`.
 
-## Running Experiments
+### Running Experiments
 
-### JLT-B/1 (Clean-Latent Prediction, /1 scale)
+#### JLT-B/1 (Clean-Latent Prediction, /1 scale)
 
 ```bash
 ./start_latent_jit_16.sh [GPU_IDS]
@@ -184,13 +182,13 @@ Key settings:
 - Epochs: 40 (with 5 warmup)
 - Learning rate: 5e-5 base LR
 
-### JLT-B/2 (Clean-Latent Prediction, /2 scale)
+#### JLT-B/2 (Clean-Latent Prediction, /2 scale)
 
 ```bash
 ./start_latent_jit_32.sh [GPU_IDS]
 ```
 
-### DiT-B/2 Baseline (Velocity Prediction)
+#### DiT-B/2 Baseline (Velocity Prediction)
 
 ```bash
 ./start_latent_v_32.sh [GPU_IDS]
@@ -198,7 +196,7 @@ Key settings:
 
 Key difference: `--flow_matching` flag enables direct velocity prediction.
 
-## Key Arguments
+### Key Arguments
 
 | Argument | Description |
 |----------|-------------|
