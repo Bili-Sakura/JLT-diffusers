@@ -113,6 +113,33 @@ Key difference: `--flow_matching` flag enables direct velocity prediction.
 | `--use_latent_cache` | Load pre-encoded safetensor latents |
 | `--vae_model_name_or_path` | FLUX.2 VAE path or HuggingFace repo |
 
+### Evaluation
+
+Download the checkpoint from HuggingFace and run evaluation:
+
+```bash
+# Download checkpoint
+huggingface-cli download dawn-neo/JLT checkpoint-last.pth
+
+# Run evaluation (requires pre-encoded latents)
+python main_jit.py \
+    --model JiT-B/1 \
+    --vae_type flux2 \
+    --img_size 256 \
+    --data_path /path/to/imagenet_latents_256 \
+    --use_latent_cache \
+    --online_eval \
+    --eval_freq 1 \
+    --gen_bsz 128 \
+    --num_images 50000 \
+    --cfg 2.9 \
+    --num_sampling_steps 50 \
+    --resume /path/to/checkpoint-last.pth \
+    --output_dir ./eval_output
+```
+
+For FID evaluation, pre-encoded ImageNet latents and reference statistics are required. See [torch-fidelity](https://github.com/toshas/torch-fidelity) for details.
+
 ## Method
 
 ### Formulation and Prediction Targets
