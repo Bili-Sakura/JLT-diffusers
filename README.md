@@ -22,7 +22,7 @@ ImageNet 256×256 samples from JLT-B/1 using 50-step Heun sampling.
 
 <sup>1</sup> Independent Researcher · <sup>2</sup> Wuhan University of Technology · <sup>3</sup> Hangzhou Jiyi AI
 
-<sup>*</sup> Equal contribution
+\* Equal contribution
 
 ## Abstract
 
