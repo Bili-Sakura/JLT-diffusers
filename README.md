@@ -216,14 +216,11 @@ Key difference: `--flow_matching` flag enables direct velocity prediction.
 ## Citation
 
 ```bibtex
-@misc{fu2026jltcleanlatentpredictionlatent,
-  title={JLT: Clean-Latent Prediction in Latent Diffusion Transformers},
-  author={Funing Fu and Tenghui Wang and Guanyu Zhou and Junyong Cen and Qichao Zhu},
-  year={2026},
-  eprint={2605.27102},
-  archivePrefix={arXiv},
-  primaryClass={cs.CV},
-  url={https://arxiv.org/abs/2605.27102}
+@article{fu2026jlt,
+  title={{JLT}: {C}lean-{L}atent {P}rediction in {L}atent {D}iffusion {T}ransformers},
+  author={Fu, Funing and Wang, Tenghui and Zhou, Guanyu and Cen, Junyong and Zhu, Qichao},
+  journal = {arXiv preprint arXiv:2605.27102},
+  year={2026}
 }
 ```
 
