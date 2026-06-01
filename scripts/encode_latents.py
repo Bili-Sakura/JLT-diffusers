@@ -20,7 +20,9 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
 from examples.image_generation.train_jlt import center_crop_arr
-from src.diffusers import Flux2LatentVAE
+from diffusers import AutoencoderKLFlux2
+
+from src.diffusers.utils.flux2_latents import encode_flux2_latents
 
 
 def parse_args():
@@ -57,7 +59,8 @@ def main():
         pin_memory=True,
     )
 
-    vae = Flux2LatentVAE(model_name_or_path=args.vae_model_name_or_path, subfolder=args.vae_subfolder)
+    load_kwargs = {"subfolder": args.vae_subfolder} if args.vae_subfolder else {}
+    vae = AutoencoderKLFlux2.from_pretrained(args.vae_model_name_or_path, **load_kwargs)
     vae.cuda().eval()
 
     latents_buf, latents_flip_buf, labels_buf = [], [], []
@@ -66,9 +69,9 @@ def main():
 
     for images, labels in tqdm(loader):
         images = images.cuda()
-        encoded = vae.encode(images)
+        encoded = encode_flux2_latents(vae, images)
         flipped = images.flip(-1)
-        encoded_flip = vae.encode(flipped)
+        encoded_flip = encode_flux2_latents(vae, flipped)
 
         latents_buf.append(encoded.cpu().half())
         latents_flip_buf.append(encoded_flip.cpu().half())

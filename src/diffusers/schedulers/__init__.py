@@ -1,3 +1,3 @@
-from .scheduling_jlt import JLTScheduler
+from .jlt_flow import configure_linear_flow_timesteps, sample_timesteps, velocity_from_prediction
 
-__all__ = ["JLTScheduler"]
+__all__ = ["configure_linear_flow_timesteps", "sample_timesteps", "velocity_from_prediction"]

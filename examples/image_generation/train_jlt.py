@@ -21,10 +21,14 @@ from torch.utils.data import DataLoader
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
 
+from diffusers import AutoencoderKLFlux2, FlowMatchEulerDiscreteScheduler, FlowMatchHeunDiscreteScheduler
+
 from examples.image_generation.latent_dataset import Flux2LatentDataset
-from src.diffusers import Flux2LatentVAE, JLTScheduler, JLTTransformer2DModel
+from src.diffusers import JLTTransformer2DModel
 from src.diffusers.models.transformers.transformer_jlt import JLT_PRESET_CONFIGS
 from src.diffusers.pipelines.jlt.pipeline_jlt import JLTPipeline
+from src.diffusers.schedulers.jlt_flow import sample_timesteps
+from src.diffusers.utils.flux2_latents import encode_flux2_latents, flux2_latent_channels
 
 
 def center_crop_arr(pil_image, image_size):
@@ -160,15 +164,15 @@ def build_transformer(args, in_channels: int) -> JLTTransformer2DModel:
 
 def compute_training_loss(
     transformer: JLTTransformer2DModel,
-    scheduler: JLTScheduler,
     x: torch.Tensor,
     labels: torch.Tensor,
     args,
-    vae: Flux2LatentVAE | None,
+    vae: AutoencoderKLFlux2 | None,
+    prediction_type: str,
 ) -> torch.Tensor:
     if vae is not None and not args.use_latent_cache:
         with torch.no_grad():
-            x = vae.encode(x)
+            x = encode_flux2_latents(vae, x)
 
     model_dtype = next(transformer.parameters()).dtype
     x = x.to(dtype=model_dtype)
@@ -182,19 +186,19 @@ def compute_training_loss(
         _, _, height, width = x.shape
         token_h = height // patch_size
         token_w = width // patch_size
-        t_tokens = scheduler.sample_timesteps(
+        t_tokens = sample_timesteps(
             x.size(0) * token_h * token_w, x.device, x.dtype, args.P_mean, args.P_std
         ).view(x.size(0), token_h * token_w)
         if args.async_timestep_drop > 0.0:
             disable = torch.rand(x.size(0), device=x.device) < args.async_timestep_drop
             if disable.any():
-                fallback = scheduler.sample_timesteps(int(disable.sum().item()), x.device, x.dtype, args.P_mean, args.P_std)
+                fallback = sample_timesteps(int(disable.sum().item()), x.device, x.dtype, args.P_mean, args.P_std)
                 t_tokens[disable] = fallback.unsqueeze(-1)
         t_map = t_tokens.view(x.size(0), 1, token_h, token_w)
         if patch_size > 1:
             t_map = t_map.repeat_interleave(patch_size, dim=-2).repeat_interleave(patch_size, dim=-1)
     else:
-        t_scalar = scheduler.sample_timesteps(x.size(0), x.device, x.dtype, args.P_mean, args.P_std)
+        t_scalar = sample_timesteps(x.size(0), x.device, x.dtype, args.P_mean, args.P_std)
         t_map = t_scalar.view(-1, *([1] * (x.ndim - 1)))
         t_tokens = t_scalar
 
@@ -260,7 +264,7 @@ def load_checkpoint(path, transformer, optimizer, device):
 
 
 @torch.no_grad()
-def evaluate_generation(accelerator, transformer, vae, scheduler, args, epoch, ema_params1):
+def evaluate_generation(accelerator, transformer, vae, scheduler, args, epoch, ema_params1, prediction_type: str):
     transformer.eval()
     state_dict = copy.deepcopy(transformer.state_dict())
     for i, (name, param) in enumerate(transformer.named_parameters()):
@@ -271,6 +275,9 @@ def evaluate_generation(accelerator, transformer, vae, scheduler, args, epoch, e
         transformer=transformer,
         scheduler=scheduler,
         vae=vae,
+        prediction_type=prediction_type,
+        t_eps=args.t_eps,
+        solver=args.sampling_method,
     )
     pipeline.to(accelerator.device)
 
@@ -326,11 +333,9 @@ def main():
     vae = None
     in_channels = 3
     if args.vae_type == "flux2":
-        vae = Flux2LatentVAE(
-            model_name_or_path=args.vae_model_name_or_path,
-            subfolder=args.vae_subfolder,
-        )
-        in_channels = vae.latent_channels
+        load_kwargs = {"subfolder": args.vae_subfolder} if args.vae_subfolder else {}
+        vae = AutoencoderKLFlux2.from_pretrained(args.vae_model_name_or_path, **load_kwargs)
+        in_channels = flux2_latent_channels(vae)
         vae.requires_grad_(False)
         vae.eval()
 
@@ -371,7 +376,10 @@ def main():
     data_loader = DataLoader(dataset_train, **loader_kwargs)
 
     prediction_type = "velocity" if args.flow_matching else "sample"
-    scheduler = JLTScheduler(t_eps=args.t_eps, solver=args.sampling_method, prediction_type=prediction_type)
+    if args.sampling_method == "heun":
+        scheduler = FlowMatchHeunDiscreteScheduler()
+    else:
+        scheduler = FlowMatchEulerDiscreteScheduler()
     transformer = build_transformer(args, in_channels)
     transformer = transformer.to(dtype=torch.bfloat16)
 
@@ -396,7 +404,9 @@ def main():
         accelerator.print(f"Resumed from {checkpoint_path}, starting epoch {start_epoch}")
 
     if args.evaluate_gen:
-        evaluate_generation(accelerator, transformer_unwrapped, vae, scheduler, args, start_epoch, ema_params1)
+        evaluate_generation(
+            accelerator, transformer_unwrapped, vae, scheduler, args, start_epoch, ema_params1, prediction_type
+        )
         accelerator.end_training()
         return
 
@@ -415,11 +425,11 @@ def main():
                 with torch.amp.autocast("cuda", dtype=torch.bfloat16):
                     loss = compute_training_loss(
                         transformer_unwrapped,
-                        scheduler,
                         x,
                         labels,
                         args,
                         accelerator.unwrap_model(vae) if vae is not None else None,
+                        prediction_type,
                     )
                 accelerator.backward(loss)
                 optimizer.step()
@@ -449,7 +459,9 @@ def main():
                 accelerator.unwrap_model(vae).save_pretrained(os.path.join(diffusers_dir, "vae"))
 
         if args.online_eval and (epoch % args.eval_freq == 0 or epoch + 1 == args.epochs):
-            evaluate_generation(accelerator, transformer_unwrapped, vae, scheduler, args, epoch, ema_params1)
+            evaluate_generation(
+                accelerator, transformer_unwrapped, vae, scheduler, args, epoch, ema_params1, prediction_type
+            )
 
     accelerator.end_training()
 
