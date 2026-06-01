@@ -15,8 +15,8 @@ JLT trains class-conditional diffusion transformers in FLUX.2 latent space with 
 ## Package layout
 
 - `src/diffusers/models/transformers/transformer_jlt.py` — `JLTTransformer2DModel` (`ModelMixin` / `ConfigMixin`)
-- `src/diffusers/schedulers/scheduling_jlt.py` — `JLTScheduler` (Euler / Heun, x- or v-prediction)
-- `src/diffusers/models/autoencoders/vae_flux2.py` — `Flux2LatentVAE` (FLUX.2 encode/decode)
+- `src/diffusers/schedulers/jlt_flow.py` — flow scheduler helpers (`FlowMatchHeunDiscreteScheduler` / `FlowMatchEulerDiscreteScheduler`)
+- `src/diffusers/utils/flux2_latents.py` — `AutoencoderKLFlux2` encode/decode (patchify + BN)
 - `src/diffusers/pipelines/jlt/pipeline_jlt.py` — `JLTPipeline` (CFG + latent sampling + VAE decode)
 - `examples/image_generation/train_jlt.py` — Accelerate training entrypoint
 - `scripts/convert_jlt_to_diffusers.py` — legacy `.pth` → diffusers directory

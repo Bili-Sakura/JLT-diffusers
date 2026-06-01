@@ -7,12 +7,19 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Union
 
 import torch
+from diffusers import AutoencoderKLFlux2
 from diffusers.pipelines.pipeline_utils import DiffusionPipeline, ImagePipelineOutput
+from diffusers.schedulers.scheduling_utils import SchedulerMixin
 from diffusers.utils.torch_utils import randn_tensor
 
-from ...models.autoencoders.vae_flux2 import Flux2LatentVAE
 from ...models.transformers.transformer_jlt import JLTTransformer2DModel
-from ...schedulers.scheduling_jlt import JLTScheduler
+from ...schedulers.jlt_flow import (
+    configure_linear_flow_timesteps,
+    flow_scheduler_cls,
+    make_flow_scheduler,
+    velocity_from_prediction,
+)
+from ...utils.flux2_latents import decode_flux2_latents
 
 
 class JLTPipeline(DiffusionPipeline):
@@ -21,16 +28,22 @@ class JLTPipeline(DiffusionPipeline):
     def __init__(
         self,
         transformer: JLTTransformer2DModel,
-        scheduler: JLTScheduler | None = None,
-        vae: Flux2LatentVAE | None = None,
+        scheduler: SchedulerMixin | None = None,
+        vae: AutoencoderKLFlux2 | None = None,
         id2label: Optional[Dict[Union[int, str], str]] = None,
+        prediction_type: str = "sample",
+        t_eps: float = 5e-2,
+        solver: str = "heun",
     ):
         super().__init__()
         self.register_modules(
             transformer=transformer,
-            scheduler=scheduler or JLTScheduler(),
+            scheduler=scheduler or make_flow_scheduler(solver),
             vae=vae,
         )
+        self.prediction_type = prediction_type
+        self.t_eps = t_eps
+        self.solver = solver
         self._id2label = self._normalize_id2label(id2label)
         self.labels = self._build_label2id(self._id2label)
         self._labels_loaded_from_model_index = bool(self._id2label)
@@ -59,24 +72,35 @@ class JLTPipeline(DiffusionPipeline):
             )
             transformer = JLTTransformer2DModel.from_pretrained(transformer_path, **model_kwargs)
 
+            solver = scheduler_kwargs.pop("solver", "heun")
+            prediction_type = scheduler_kwargs.pop("prediction_type", "sample")
+            t_eps = float(scheduler_kwargs.pop("t_eps", 5e-2))
             try:
-                scheduler = JLTScheduler.from_pretrained(
+                scheduler = flow_scheduler_cls(solver).from_pretrained(
                     pretrained_model_name_or_path,
                     subfolder=scheduler_subfolder,
                     **scheduler_kwargs,
                 )
             except Exception:
-                scheduler = JLTScheduler(**scheduler_kwargs)
+                scheduler = make_flow_scheduler(solver)
 
             vae = None
             if vae_subfolder is not None:
                 try:
-                    vae = Flux2LatentVAE.from_pretrained(pretrained_model_name_or_path, subfolder=vae_subfolder)
+                    vae = AutoencoderKLFlux2.from_pretrained(pretrained_model_name_or_path, subfolder=vae_subfolder)
                 except Exception:
                     vae = None
 
             id2label = cls._read_id2label_from_model_index(str(base_path))
-            return cls(transformer=transformer, scheduler=scheduler, vae=vae, id2label=id2label)
+            return cls(
+                transformer=transformer,
+                scheduler=scheduler,
+                vae=vae,
+                id2label=id2label,
+                solver=solver,
+                prediction_type=prediction_type,
+                t_eps=t_eps,
+            )
 
     @staticmethod
     def _normalize_id2label(id2label: Optional[Dict[Union[int, str], str]]) -> Dict[int, str]:
@@ -142,6 +166,10 @@ class JLTPipeline(DiffusionPipeline):
             return self.get_label_ids(class_labels)
         return list(class_labels)
 
+    def _to_jlt_time(self, timestep: Union[float, torch.Tensor]) -> torch.Tensor:
+        t_value = timestep if isinstance(timestep, torch.Tensor) else torch.tensor(timestep)
+        return 1.0 - t_value / self.scheduler.config.num_train_timesteps
+
     def _predict_velocity(
         self,
         z_value: torch.Tensor,
@@ -153,7 +181,7 @@ class JLTPipeline(DiffusionPipeline):
         guidance_interval_min: float,
         guidance_interval_max: float,
     ) -> torch.Tensor:
-        t = torch.as_tensor(t, device=z_value.device, dtype=z_value.dtype)
+        t_jlt = self._to_jlt_time(t).to(device=z_value.device, dtype=z_value.dtype)
         if do_classifier_free_guidance:
             z_in = torch.cat([z_value, z_value], dim=0)
             labels = torch.cat([class_labels, class_null], dim=0)
@@ -161,17 +189,23 @@ class JLTPipeline(DiffusionPipeline):
             z_in = z_value
             labels = class_labels
 
-        t_batch = t.flatten().expand(z_in.shape[0])
+        t_batch = t_jlt.flatten().expand(z_in.shape[0])
         model_out = self.transformer(z_in, timestep=t_batch, class_labels=labels).sample
-        v = self.scheduler.velocity_from_prediction(z_in, model_out, t)
+        v = velocity_from_prediction(
+            z_in,
+            model_out,
+            t_jlt,
+            prediction_type=self.prediction_type,
+            t_eps=self.t_eps,
+        )
 
         if not do_classifier_free_guidance:
             return v
 
         v_cond, v_uncond = v.chunk(2, dim=0)
-        interval_mask = t < guidance_interval_max
+        interval_mask = t_jlt < guidance_interval_max
         if guidance_interval_min != 0.0:
-            interval_mask = interval_mask & (t > guidance_interval_min)
+            interval_mask = interval_mask & (t_jlt > guidance_interval_min)
         scale = torch.where(
             interval_mask,
             torch.tensor(guidance_scale, device=z_value.device, dtype=z_value.dtype),
@@ -192,12 +226,14 @@ class JLTPipeline(DiffusionPipeline):
         sampling_method: str,
     ) -> torch.Tensor:
         device = latents.device
-        self.scheduler.set_timesteps(num_inference_steps, device=device, solver=sampling_method)
-        timesteps = self.scheduler.timesteps
+        if type(self.scheduler).__name__ != type(make_flow_scheduler(sampling_method)).__name__:
+            self.register_modules(scheduler=make_flow_scheduler(sampling_method))
 
-        for i in self.progress_bar(range(num_inference_steps - 1)):
-            t = timesteps[i]
-            t_next = timesteps[i + 1]
+        configure_linear_flow_timesteps(self.scheduler, num_inference_steps, device=device)
+        if hasattr(self.scheduler, "set_begin_index"):
+            self.scheduler.set_begin_index(0)
+
+        for t in self.progress_bar(self.scheduler.timesteps):
             v = self._predict_velocity(
                 latents,
                 t,
@@ -208,36 +244,9 @@ class JLTPipeline(DiffusionPipeline):
                 guidance_interval_min,
                 guidance_interval_max,
             )
+            latents = self.scheduler.step(-v, t, latents).prev_sample
 
-            if sampling_method == "heun":
-                latents_euler = latents + (t_next - t) * v
-                v_next = self._predict_velocity(
-                    latents_euler,
-                    t_next,
-                    class_labels,
-                    class_null,
-                    do_classifier_free_guidance,
-                    guidance_scale,
-                    guidance_interval_min,
-                    guidance_interval_max,
-                )
-                latents = self.scheduler.step(v, t, latents, model_output_next=v_next).prev_sample
-            else:
-                latents = self.scheduler.step(v, t, latents).prev_sample
-
-        t = timesteps[-2]
-        t_next = timesteps[-1]
-        v = self._predict_velocity(
-            latents,
-            t,
-            class_labels,
-            class_null,
-            do_classifier_free_guidance,
-            guidance_scale,
-            guidance_interval_min,
-            guidance_interval_max,
-        )
-        return latents + (t_next - t) * v
+        return latents
 
     @torch.inference_mode()
     def __call__(
@@ -254,7 +263,7 @@ class JLTPipeline(DiffusionPipeline):
         output_type: Optional[str] = "pil",
         return_dict: bool = True,
     ) -> Union[ImagePipelineOutput, Tuple]:
-        solver = sampling_method or self.scheduler.config.solver
+        solver = sampling_method or self.solver
         if solver not in {"heun", "euler"}:
             raise ValueError("sampling_method must be one of: 'heun', 'euler'.")
         if num_inference_steps < 2:
@@ -263,7 +272,7 @@ class JLTPipeline(DiffusionPipeline):
             raise ValueError("output_type must be one of: 'pil', 'np', 'pt', 'latent'.")
 
         if t_eps is not None:
-            self.scheduler.register_to_config(t_eps=t_eps)
+            self.t_eps = t_eps
 
         class_label_ids = self._normalize_class_labels(class_labels)
         do_classifier_free_guidance = guidance_scale is not None and guidance_scale > 1.0
@@ -307,7 +316,7 @@ class JLTPipeline(DiffusionPipeline):
             return ImagePipelineOutput(images=latents)
 
         if self.vae is not None:
-            images_pt = self.vae.decode(latents)
+            images_pt = decode_flux2_latents(self.vae, latents)
         else:
             images_pt = latents
 

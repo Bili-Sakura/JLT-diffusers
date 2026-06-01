@@ -1,4 +1,5 @@
-from .autoencoders.vae_flux2 import Flux2LatentVAE
+from diffusers import AutoencoderKLFlux2
+
 from .transformers.transformer_jlt import JLTTransformer2DModel
 
-__all__ = ["JLTTransformer2DModel", "Flux2LatentVAE"]
+__all__ = ["JLTTransformer2DModel", "AutoencoderKLFlux2"]

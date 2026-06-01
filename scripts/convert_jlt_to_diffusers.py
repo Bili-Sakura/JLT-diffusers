@@ -12,7 +12,8 @@ import torch
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
-from src.diffusers import JLTScheduler, JLTTransformer2DModel
+from src.diffusers import JLTTransformer2DModel, make_flow_scheduler
+from src.diffusers.schedulers.jlt_flow import flow_scheduler_cls
 from src.diffusers.models.transformers.transformer_jlt import config_from_legacy
 
 
@@ -49,16 +50,16 @@ def main():
     scheduler_dir = output_dir / "scheduler"
     transformer.save_pretrained(transformer_dir, safe_serialization=args.safe_serialization)
 
-    scheduler = JLTScheduler(
-        t_eps=float(getattr(metadata.get("source_args"), "t_eps", 5e-2) if metadata.get("source_args") else 5e-2),
-        prediction_type="velocity" if getattr(metadata.get("source_args"), "flow_matching", False) else "sample",
-    )
+    source_args = metadata.get("source_args")
+    solver = getattr(source_args, "sampling_method", "heun") if source_args else "heun"
+    scheduler = make_flow_scheduler(solver)
     scheduler.save_pretrained(scheduler_dir)
 
+    scheduler_name = flow_scheduler_cls(solver).__name__
     model_index = {
         "_class_name": "JLTPipeline",
         "transformer": ["src.diffusers.models.transformers.transformer_jlt", "JLTTransformer2DModel"],
-        "scheduler": ["src.diffusers.schedulers.scheduling_jlt", "JLTScheduler"],
+        "scheduler": ["diffusers", scheduler_name],
     }
     (output_dir / "model_index.json").write_text(json.dumps(model_index, indent=2), encoding="utf-8")
     (output_dir / "conversion_metadata.json").write_text(
