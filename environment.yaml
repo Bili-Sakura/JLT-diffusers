@@ -1,4 +1,4 @@
-name: jit
+name: jlt
 channels:
   - pytorch
   - defaults
@@ -11,10 +11,11 @@ dependencies:
   - torchvision=0.20.1
   - numpy=1.22
   - pip:
+    - diffusers>=0.32.0
+    - accelerate>=0.33.0
+    - einops>=0.8.1
+    - safetensors>=0.4.0
     - opencv-python==4.11.0.86
-    - timm==0.9.12
-    - tensorboard==2.10.0
-    - scipy==1.9.1
-    - einops==0.8.1
-    - gdown==5.2.0
-    - -e git+https://github.com/LTH14/torch-fidelity.git@master#egg=torch-fidelity
+    - tqdm>=4.66
+    - wandb
+    - -e .
