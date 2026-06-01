@@ -21,12 +21,13 @@ from torch.utils.data import DataLoader
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
 
-from diffusers import AutoencoderKLFlux2
+from diffusers import AutoencoderKLFlux2, FlowMatchEulerDiscreteScheduler, FlowMatchHeunDiscreteScheduler
 
 from examples.image_generation.latent_dataset import Flux2LatentDataset
-from src.diffusers import JLTTransformer2DModel, make_flow_scheduler, sample_timesteps
+from src.diffusers import JLTTransformer2DModel
 from src.diffusers.models.transformers.transformer_jlt import JLT_PRESET_CONFIGS
 from src.diffusers.pipelines.jlt.pipeline_jlt import JLTPipeline
+from src.diffusers.schedulers.jlt_flow import sample_timesteps
 from src.diffusers.utils.flux2_latents import encode_flux2_latents, flux2_latent_channels
 
 
@@ -263,7 +264,7 @@ def load_checkpoint(path, transformer, optimizer, device):
 
 
 @torch.no_grad()
-def evaluate_generation(accelerator, transformer, vae, args, epoch, ema_params1, prediction_type: str):
+def evaluate_generation(accelerator, transformer, vae, scheduler, args, epoch, ema_params1, prediction_type: str):
     transformer.eval()
     state_dict = copy.deepcopy(transformer.state_dict())
     for i, (name, param) in enumerate(transformer.named_parameters()):
@@ -272,7 +273,7 @@ def evaluate_generation(accelerator, transformer, vae, args, epoch, ema_params1,
 
     pipeline = JLTPipeline(
         transformer=transformer,
-        scheduler=make_flow_scheduler(args.sampling_method),
+        scheduler=scheduler,
         vae=vae,
         prediction_type=prediction_type,
         t_eps=args.t_eps,
@@ -375,6 +376,10 @@ def main():
     data_loader = DataLoader(dataset_train, **loader_kwargs)
 
     prediction_type = "velocity" if args.flow_matching else "sample"
+    if args.sampling_method == "heun":
+        scheduler = FlowMatchHeunDiscreteScheduler()
+    else:
+        scheduler = FlowMatchEulerDiscreteScheduler()
     transformer = build_transformer(args, in_channels)
     transformer = transformer.to(dtype=torch.bfloat16)
 
@@ -399,7 +404,9 @@ def main():
         accelerator.print(f"Resumed from {checkpoint_path}, starting epoch {start_epoch}")
 
     if args.evaluate_gen:
-        evaluate_generation(accelerator, transformer_unwrapped, vae, args, start_epoch, ema_params1, prediction_type)
+        evaluate_generation(
+            accelerator, transformer_unwrapped, vae, scheduler, args, start_epoch, ema_params1, prediction_type
+        )
         accelerator.end_training()
         return
 
@@ -447,12 +454,14 @@ def main():
             )
             diffusers_dir = os.path.join(args.output_dir, "diffusers")
             transformer_unwrapped.save_pretrained(os.path.join(diffusers_dir, "transformer"))
-            make_flow_scheduler(args.sampling_method).save_pretrained(os.path.join(diffusers_dir, "scheduler"))
+            scheduler.save_pretrained(os.path.join(diffusers_dir, "scheduler"))
             if vae is not None:
                 accelerator.unwrap_model(vae).save_pretrained(os.path.join(diffusers_dir, "vae"))
 
         if args.online_eval and (epoch % args.eval_freq == 0 or epoch + 1 == args.epochs):
-            evaluate_generation(accelerator, transformer_unwrapped, vae, args, epoch, ema_params1, prediction_type)
+            evaluate_generation(
+                accelerator, transformer_unwrapped, vae, scheduler, args, epoch, ema_params1, prediction_type
+            )
 
     accelerator.end_training()
 

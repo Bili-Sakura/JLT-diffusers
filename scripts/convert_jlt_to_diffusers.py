@@ -12,8 +12,9 @@ import torch
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
-from src.diffusers import JLTTransformer2DModel, make_flow_scheduler
-from src.diffusers.schedulers.jlt_flow import flow_scheduler_cls
+from diffusers import FlowMatchEulerDiscreteScheduler, FlowMatchHeunDiscreteScheduler
+
+from src.diffusers import JLTTransformer2DModel
 from src.diffusers.models.transformers.transformer_jlt import config_from_legacy
 
 
@@ -52,10 +53,13 @@ def main():
 
     source_args = metadata.get("source_args")
     solver = getattr(source_args, "sampling_method", "heun") if source_args else "heun"
-    scheduler = make_flow_scheduler(solver)
+    if solver == "heun":
+        scheduler = FlowMatchHeunDiscreteScheduler()
+        scheduler_name = "FlowMatchHeunDiscreteScheduler"
+    else:
+        scheduler = FlowMatchEulerDiscreteScheduler()
+        scheduler_name = "FlowMatchEulerDiscreteScheduler"
     scheduler.save_pretrained(scheduler_dir)
-
-    scheduler_name = flow_scheduler_cls(solver).__name__
     model_index = {
         "_class_name": "JLTPipeline",
         "transformer": ["src.diffusers.models.transformers.transformer_jlt", "JLTTransformer2DModel"],

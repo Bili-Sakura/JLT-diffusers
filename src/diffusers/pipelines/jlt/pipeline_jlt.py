@@ -9,17 +9,24 @@ from typing import Dict, List, Optional, Tuple, Union
 import torch
 from diffusers import AutoencoderKLFlux2
 from diffusers.pipelines.pipeline_utils import DiffusionPipeline, ImagePipelineOutput
+from diffusers.schedulers import FlowMatchEulerDiscreteScheduler, FlowMatchHeunDiscreteScheduler
 from diffusers.schedulers.scheduling_utils import SchedulerMixin
 from diffusers.utils.torch_utils import randn_tensor
 
 from ...models.transformers.transformer_jlt import JLTTransformer2DModel
-from ...schedulers.jlt_flow import (
-    configure_linear_flow_timesteps,
-    flow_scheduler_cls,
-    make_flow_scheduler,
-    velocity_from_prediction,
-)
+from ...schedulers.jlt_flow import configure_linear_flow_timesteps, velocity_from_prediction
 from ...utils.flux2_latents import decode_flux2_latents
+
+_FLOW_SCHEDULERS = {
+    "heun": FlowMatchHeunDiscreteScheduler,
+    "euler": FlowMatchEulerDiscreteScheduler,
+}
+
+
+def _new_flow_scheduler(solver: str) -> SchedulerMixin:
+    if solver not in _FLOW_SCHEDULERS:
+        raise ValueError("solver must be one of: 'heun', 'euler'.")
+    return _FLOW_SCHEDULERS[solver]()
 
 
 class JLTPipeline(DiffusionPipeline):
@@ -38,7 +45,7 @@ class JLTPipeline(DiffusionPipeline):
         super().__init__()
         self.register_modules(
             transformer=transformer,
-            scheduler=scheduler or make_flow_scheduler(solver),
+            scheduler=scheduler or _new_flow_scheduler(solver),
             vae=vae,
         )
         self.prediction_type = prediction_type
@@ -75,14 +82,15 @@ class JLTPipeline(DiffusionPipeline):
             solver = scheduler_kwargs.pop("solver", "heun")
             prediction_type = scheduler_kwargs.pop("prediction_type", "sample")
             t_eps = float(scheduler_kwargs.pop("t_eps", 5e-2))
+            scheduler_cls = _FLOW_SCHEDULERS.get(solver, FlowMatchHeunDiscreteScheduler)
             try:
-                scheduler = flow_scheduler_cls(solver).from_pretrained(
+                scheduler = scheduler_cls.from_pretrained(
                     pretrained_model_name_or_path,
                     subfolder=scheduler_subfolder,
                     **scheduler_kwargs,
                 )
             except Exception:
-                scheduler = make_flow_scheduler(solver)
+                scheduler = scheduler_cls()
 
             vae = None
             if vae_subfolder is not None:
@@ -226,8 +234,8 @@ class JLTPipeline(DiffusionPipeline):
         sampling_method: str,
     ) -> torch.Tensor:
         device = latents.device
-        if type(self.scheduler).__name__ != type(make_flow_scheduler(sampling_method)).__name__:
-            self.register_modules(scheduler=make_flow_scheduler(sampling_method))
+        if not isinstance(self.scheduler, _FLOW_SCHEDULERS[sampling_method]):
+            self.register_modules(scheduler=_new_flow_scheduler(sampling_method))
 
         configure_linear_flow_timesteps(self.scheduler, num_inference_steps, device=device)
         if hasattr(self.scheduler, "set_begin_index"):
@@ -264,7 +272,7 @@ class JLTPipeline(DiffusionPipeline):
         return_dict: bool = True,
     ) -> Union[ImagePipelineOutput, Tuple]:
         solver = sampling_method or self.solver
-        if solver not in {"heun", "euler"}:
+        if solver not in _FLOW_SCHEDULERS:
             raise ValueError("sampling_method must be one of: 'heun', 'euler'.")
         if num_inference_steps < 2:
             raise ValueError("num_inference_steps must be >= 2.")

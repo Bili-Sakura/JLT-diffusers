@@ -1,4 +1,4 @@
-"""JLT flow-matching helpers and diffusers scheduler factories."""
+"""JLT-specific flow-matching helpers (schedulers come from diffusers)."""
 
 from __future__ import annotations
 
@@ -10,24 +10,12 @@ from diffusers.schedulers import FlowMatchEulerDiscreteScheduler, FlowMatchHeunD
 from diffusers.schedulers.scheduling_utils import SchedulerMixin
 
 
-def flow_scheduler_cls(solver: str):
-    if solver == "heun":
-        return FlowMatchHeunDiscreteScheduler
-    if solver == "euler":
-        return FlowMatchEulerDiscreteScheduler
-    raise ValueError("solver must be one of: 'heun', 'euler'.")
-
-
-def make_flow_scheduler(solver: str = "heun", num_train_timesteps: int = 1000) -> SchedulerMixin:
-    return flow_scheduler_cls(solver)(num_train_timesteps=num_train_timesteps)
-
-
 def configure_linear_flow_timesteps(
     scheduler: SchedulerMixin,
     num_inference_steps: int,
     device: Union[str, torch.device, None] = None,
 ) -> None:
-    """Match JLT sampling: sigma 1 (noise) -> 0 (data) with uniform steps."""
+    """Uniform sigma schedule from 1 (noise) to 0 (data), matching JLT training."""
     if isinstance(scheduler, FlowMatchHeunDiscreteScheduler):
         scheduler.num_inference_steps = num_inference_steps
         sigmas = np.linspace(1.0, 0.0, num_inference_steps, dtype=np.float32)
