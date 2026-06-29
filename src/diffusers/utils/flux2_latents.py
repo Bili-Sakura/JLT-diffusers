@@ -59,8 +59,8 @@ def encode_flux2_latents(vae: AutoencoderKLFlux2, images: torch.Tensor) -> torch
 @torch.no_grad()
 def decode_flux2_latents(vae: AutoencoderKLFlux2, latents: torch.Tensor) -> torch.Tensor:
     vae_param = next(vae.parameters())
-    latents = latents.to(device=vae_param.device, dtype=vae_param.dtype)
+    latents = latents.to(device=vae_param.device, dtype=torch.float32)
     mean, std = flux2_bn_stats(vae, latents)
     latents = latents * std + mean
     latents = _unpatchify_latents(latents)
-    return vae.decode(latents, return_dict=False)[0]
+    return vae.decode(latents.to(vae_param.dtype), return_dict=False)[0].float()

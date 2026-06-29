@@ -289,7 +289,6 @@ def evaluate_generation(accelerator, transformer, vae, scheduler, args, epoch, e
             guidance_scale=args.cfg,
             guidance_interval_min=args.interval_min,
             guidance_interval_max=args.interval_max,
-            sampling_method=args.sampling_method,
             noise_scale=args.noise_scale,
             output_type="latent" if vae is None else "pt",
         )

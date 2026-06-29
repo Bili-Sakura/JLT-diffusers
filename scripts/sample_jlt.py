@@ -29,13 +29,12 @@ def parse_args():
 
 def main():
     args = parse_args()
-    pipeline = JLTPipeline.from_pretrained(args.model)
+    pipeline = JLTPipeline.from_pretrained(args.model, scheduler_kwargs={"solver": args.solver})
     pipeline.to(args.device, torch.bfloat16)
 
     result = pipeline(
         class_labels=args.class_label,
         num_inference_steps=args.num_inference_steps,
-        sampling_method=args.solver,
         guidance_scale=args.cfg,
         noise_scale=args.noise_scale,
     )

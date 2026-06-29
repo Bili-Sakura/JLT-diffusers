@@ -61,9 +61,11 @@ def main():
         scheduler_name = "FlowMatchEulerDiscreteScheduler"
     scheduler.save_pretrained(scheduler_dir)
     model_index = {
-        "_class_name": "JLTPipeline",
-        "transformer": ["src.diffusers.models.transformers.transformer_jlt", "JLTTransformer2DModel"],
+        "_class_name": ["pipeline", "JLTPipeline"],
+        "_diffusers_version": "0.36.0",
+        "transformer": ["transformer_jlt", "JLTTransformer2DModel"],
         "scheduler": ["diffusers", scheduler_name],
+        "vae": ["diffusers", "AutoencoderKLFlux2"],
     }
     (output_dir / "model_index.json").write_text(json.dumps(model_index, indent=2), encoding="utf-8")
     (output_dir / "conversion_metadata.json").write_text(

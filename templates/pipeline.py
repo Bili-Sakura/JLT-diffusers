@@ -1,11 +1,16 @@
-"""JLT diffusion pipeline with optional FLUX.2 VAE decode."""
+"""Hub custom pipeline: JLTPipeline.
+Load with native Hugging Face diffusers and trust_remote_code=True.
+"""
 
 from __future__ import annotations
 
+import importlib
 import json
+import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Union
 
+import numpy as np
 import torch
 from diffusers import AutoencoderKLFlux2
 from diffusers.pipelines.pipeline_utils import DiffusionPipeline, ImagePipelineOutput
@@ -13,9 +18,75 @@ from diffusers.schedulers import FlowMatchEulerDiscreteScheduler, FlowMatchHeunD
 from diffusers.schedulers.scheduling_utils import SchedulerMixin
 from diffusers.utils.torch_utils import randn_tensor
 
-from ...models.transformers.transformer_jlt import JLTTransformer2DModel
-from ...schedulers.jlt_flow import velocity_from_prediction
-from ...utils.flux2_latents import decode_flux2_latents
+
+def configure_linear_flow_timesteps(
+    scheduler: SchedulerMixin,
+    num_inference_steps: int,
+    device: Union[str, torch.device, None] = None,
+) -> None:
+    if isinstance(scheduler, FlowMatchHeunDiscreteScheduler):
+        scheduler.num_inference_steps = num_inference_steps
+        sigmas = np.linspace(1.0, 0.0, num_inference_steps, dtype=np.float32)
+        sigmas_t = torch.from_numpy(sigmas).to(dtype=torch.float32, device=device)
+        shift = scheduler.config.shift
+        sigmas_t = shift * sigmas_t / (1 + (shift - 1) * sigmas_t)
+        timesteps = sigmas_t * scheduler.config.num_train_timesteps
+        timesteps = torch.cat([timesteps[:1], timesteps[1:].repeat_interleave(2)])
+        scheduler.timesteps = timesteps.to(device=device)
+        sigmas_t = torch.cat([sigmas_t, torch.zeros(1, device=sigmas_t.device)])
+        scheduler.sigmas = torch.cat([sigmas_t[:1], sigmas_t[1:-1].repeat_interleave(2), sigmas_t[-1:]])
+        scheduler._step_index = None
+        scheduler._begin_index = None
+        scheduler.prev_derivative = None
+        scheduler.dt = None
+        scheduler.sample = None
+        return
+
+    sigmas = np.linspace(1.0, 0.0, num_inference_steps, dtype=np.float32).tolist()
+    scheduler.set_timesteps(num_inference_steps, device=device, sigmas=sigmas)
+
+
+def velocity_from_prediction(
+    sample: torch.Tensor,
+    model_output: torch.Tensor,
+    timestep: Union[float, torch.Tensor],
+    *,
+    prediction_type: str = "sample",
+    t_eps: float = 5e-2,
+) -> torch.Tensor:
+    if prediction_type == "velocity":
+        return model_output
+
+    t = torch.as_tensor(timestep, device=sample.device, dtype=sample.dtype)
+    while t.ndim < sample.ndim:
+        t = t.unsqueeze(-1)
+    denom = (1.0 - t).clamp_min(t_eps)
+    return (model_output - sample) / denom
+
+
+def _unpatchify_latents(latents: torch.Tensor) -> torch.Tensor:
+    batch_size, num_channels_latents, height, width = latents.shape
+    latents = latents.reshape(batch_size, num_channels_latents // (2 * 2), 2, 2, height, width)
+    latents = latents.permute(0, 1, 4, 2, 5, 3)
+    return latents.reshape(batch_size, num_channels_latents // (2 * 2), height * 2, width * 2)
+
+
+def _flux2_bn_stats(vae: AutoencoderKLFlux2, ref: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    mean = vae.bn.running_mean.view(1, -1, 1, 1).to(ref.device, ref.dtype)
+    std = torch.sqrt(
+        vae.bn.running_var.view(1, -1, 1, 1).to(ref.device, ref.dtype) + vae.config.batch_norm_eps
+    )
+    return mean, std
+
+
+@torch.no_grad()
+def decode_flux2_latents(vae: AutoencoderKLFlux2, latents: torch.Tensor) -> torch.Tensor:
+    vae_param = next(vae.parameters())
+    latents = latents.to(device=vae_param.device, dtype=torch.float32)
+    mean, std = _flux2_bn_stats(vae, latents)
+    latents = latents * std + mean
+    latents = _unpatchify_latents(latents)
+    return vae.decode(latents.to(vae_param.dtype), return_dict=False)[0].float()
 
 _FLOW_SCHEDULERS = {
     "heun": FlowMatchHeunDiscreteScheduler,
@@ -38,11 +109,17 @@ def _solver_from_scheduler(scheduler: SchedulerMixin | None) -> str:
 
 
 class JLTPipeline(DiffusionPipeline):
+    r"""
+    Pipeline for class-conditional image generation with JLT (Clean-Latent JiT).
+
+    Latent models (`in_channels=128`) require a FLUX.2 VAE attached for `output_type="pil"`.
+    """
+
     model_cpu_offload_seq = "transformer->vae"
 
     def __init__(
         self,
-        transformer: JLTTransformer2DModel,
+        transformer,
         scheduler: SchedulerMixin | None = None,
         vae: AutoencoderKLFlux2 | None = None,
         id2label: Optional[Dict[Union[int, str], str]] = None,
@@ -51,6 +128,10 @@ class JLTPipeline(DiffusionPipeline):
         solver: str = "heun",
     ):
         super().__init__()
+        if isinstance(scheduler, list):
+            scheduler = None
+        if isinstance(vae, list):
+            vae = None
         self.register_modules(
             transformer=transformer,
             scheduler=scheduler or _new_flow_scheduler(solver),
@@ -64,60 +145,96 @@ class JLTPipeline(DiffusionPipeline):
         self._labels_loaded_from_model_index = bool(self._id2label)
 
     @classmethod
-    def from_pretrained(cls, pretrained_model_name_or_path: str, **kwargs):
-        model_kwargs = dict(kwargs)
-        transformer_subfolder = model_kwargs.pop("transformer_subfolder", None)
-        scheduler_subfolder = model_kwargs.pop("scheduler_subfolder", None)
-        vae_subfolder = model_kwargs.pop("vae_subfolder", None)
-        scheduler_kwargs = model_kwargs.pop("scheduler_kwargs", {})
-        base_path = Path(pretrained_model_name_or_path)
+    def from_pretrained(cls, pretrained_model_name_or_path=None, subfolder=None, **kwargs):
+        repo_root = Path(__file__).resolve().parent
 
-        if transformer_subfolder is None and (base_path / "transformer").exists():
-            transformer_subfolder = "transformer"
-        if scheduler_subfolder is None and (base_path / "scheduler").exists():
-            scheduler_subfolder = "scheduler"
-        if vae_subfolder is None and (base_path / "vae").exists():
-            vae_subfolder = "vae"
+        if pretrained_model_name_or_path in (None, "", "."):
+            variant = repo_root
+        else:
+            variant = Path(pretrained_model_name_or_path)
+            if not variant.is_absolute():
+                candidate = (Path.cwd() / variant).resolve()
+                variant = candidate if candidate.exists() else (repo_root / variant).resolve()
+            if subfolder:
+                variant = variant / subfolder
+
+        model_kwargs = dict(kwargs)
+        inserted: List[str] = []
+
+        def _load_transformer():
+            comp_dir = variant / "transformer"
+            module_path = comp_dir / "transformer_jlt.py"
+            if not module_path.exists() or not (comp_dir / "config.json").exists():
+                return None
+
+            comp_path = str(comp_dir)
+            if comp_path not in sys.path:
+                sys.path.insert(0, comp_path)
+                inserted.append(comp_path)
+
+            module = importlib.import_module("transformer_jlt")
+            transformer_cls = getattr(module, "JLTTransformer2DModel")
+            return transformer_cls.from_pretrained(str(comp_dir), **model_kwargs)
+
+        def _load_scheduler():
+            scheduler_dir = variant / "scheduler"
+            config_path = scheduler_dir / "scheduler_config.json"
+            if not config_path.exists():
+                return _new_flow_scheduler("heun")
+
+            scheduler_entry = None
+            model_index_path = variant / "model_index.json"
+            if model_index_path.exists():
+                scheduler_entry = json.loads(model_index_path.read_text(encoding="utf-8")).get("scheduler")
+
+            if scheduler_entry is None:
+                class_name = json.loads(config_path.read_text(encoding="utf-8")).get("_class_name")
+                scheduler_entry = ["diffusers", class_name]
+
+            module_name, class_name = scheduler_entry
+            if module_name == "diffusers":
+                import diffusers.schedulers as schedulers_pkg
+
+                scheduler_cls = getattr(schedulers_pkg, class_name)
+                return scheduler_cls.from_pretrained(str(scheduler_dir), **model_kwargs)
+
+            comp_path = str(scheduler_dir)
+            if comp_path not in sys.path:
+                sys.path.insert(0, comp_path)
+                inserted.append(comp_path)
+            module = importlib.import_module(module_name)
+            scheduler_cls = getattr(module, class_name)
+            return scheduler_cls.from_pretrained(str(scheduler_dir), **model_kwargs)
+
+        def _load_vae():
+            vae_dir = variant / "vae"
+            if vae_dir.exists() and (vae_dir / "config.json").exists():
+                return AutoencoderKLFlux2.from_pretrained(str(vae_dir), **model_kwargs)
+            return None
 
         try:
-            return super().from_pretrained(pretrained_model_name_or_path, **kwargs)
-        except Exception:
-            transformer_path = (
-                str(base_path / transformer_subfolder) if transformer_subfolder else pretrained_model_name_or_path
-            )
-            transformer = JLTTransformer2DModel.from_pretrained(transformer_path, **model_kwargs)
+            transformer = _load_transformer()
+            if transformer is None:
+                raise ValueError(f"No loadable transformer found under {variant}")
 
-            explicit_solver = scheduler_kwargs.pop("solver", None)
-            prediction_type = scheduler_kwargs.pop("prediction_type", "sample")
-            t_eps = float(scheduler_kwargs.pop("t_eps", 5e-2))
-            scheduler_cls = _FLOW_SCHEDULERS.get(explicit_solver or "heun", FlowMatchHeunDiscreteScheduler)
-            try:
-                scheduler = scheduler_cls.from_pretrained(
-                    pretrained_model_name_or_path,
-                    subfolder=scheduler_subfolder,
-                    **scheduler_kwargs,
-                )
-            except Exception:
-                scheduler = scheduler_cls()
-
-            vae = None
-            if vae_subfolder is not None:
-                try:
-                    vae = AutoencoderKLFlux2.from_pretrained(pretrained_model_name_or_path, subfolder=vae_subfolder)
-                except Exception:
-                    vae = None
-
-            id2label = cls._read_id2label_from_model_index(str(base_path))
-            solver = explicit_solver or _solver_from_scheduler(scheduler)
-            return cls(
+            scheduler = _load_scheduler()
+            vae = _load_vae()
+            id2label = cls._read_id2label_from_model_index(str(variant))
+            solver = _solver_from_scheduler(scheduler)
+            pipe = cls(
                 transformer=transformer,
                 scheduler=scheduler,
                 vae=vae,
                 id2label=id2label,
                 solver=solver,
-                prediction_type=prediction_type,
-                t_eps=t_eps,
             )
+            if hasattr(pipe, "register_to_config"):
+                pipe.register_to_config(_name_or_path=str(variant))
+            return pipe
+        finally:
+            for comp_path in inserted:
+                if comp_path in sys.path:
+                    sys.path.remove(comp_path)
 
     @staticmethod
     def _normalize_id2label(id2label: Optional[Dict[Union[int, str], str]]) -> Dict[int, str]:

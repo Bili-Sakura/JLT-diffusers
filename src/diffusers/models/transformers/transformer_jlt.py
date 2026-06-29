@@ -110,7 +110,6 @@ def remap_legacy_state_dict(state_dict: Dict[str, torch.Tensor]) -> Dict[str, to
                 new_key = new_key[len(prefix) :]
                 break
 
-        new_key = new_key.replace(".adaLN_modulation.1.", ".adaLN_modulation.")
         if new_key.startswith("final_layer."):
             new_key = new_key.replace("final_layer.norm_final", "norm_final")
             new_key = new_key.replace("final_layer.linear", "linear_final")
@@ -291,7 +290,7 @@ class JLTAttention(nn.Module):
             k = k.transpose(1, 2)
 
         if _HAS_FLASH_ATTN:
-            attn_dtype = torch.bfloat16
+            attn_dtype = q.dtype if q.dtype in (torch.float16, torch.bfloat16) else torch.bfloat16
             q = q.transpose(1, 2).contiguous().to(attn_dtype)
             k = k.transpose(1, 2).contiguous().to(attn_dtype)
             v = v.transpose(1, 2).contiguous().to(attn_dtype)
